@@ -1,0 +1,50 @@
+Label-free CBM Concept Generation Summary
+==================================================
+Dataset: cifar10
+Method: label_free_cbm
+Generated: 2025-08-01 05:46:24
+Total Classes: 10
+Total Unique Concepts: 195
+Average Concepts per Class: 19
+
+Files Generated:
+- Filtered concepts: cifar10_filtered_20250801_054624.txt
+- Most important features: cifar10_most_important_features_20250801_054624.json
+- Commonly seen around: cifar10_commonly_seen_around_20250801_054624.json
+- Superclasses: cifar10_superclasses_20250801_054624.json
+- Metadata: cifar10_metadata_20250801_054624.json
+
+Class Names:
+ 1. airplane
+ 2. automobile
+ 3. bird
+ 4. cat
+ 5. deer
+ 6. dog
+ 7. frog
+ 8. horse
+ 9. ship
+10. truck
+
+Sample Concepts:
+ 1. a size
+ 2. a Control surfaces Flaps
+ 3. a ailerons
+ 4. a roll
+ 5. a and yaw
+ 6. a type
+ 7. a struts
+ 8. a such as gliders
+ 9. a ultralight planes
+10. a or experimental designs
+11. a Airport
+12. a Check-in counters and kiosks
+13. a Baggage claim carousels
+14. a metal detectors
+15. a scanners
+16. a restaurants
+17. a bars
+18. a Uber
+19. a Lyft
+20. a Parking garages and lots
+... and 175 more concepts
