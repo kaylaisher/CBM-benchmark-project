@@ -3,9 +3,9 @@
 Multi-Method Concept Generation Framework
 Implements three specific research-backed methods for concept generation:
 
-1. Label-free CBM (ICLR 2023) - https://arxiv.org/pdf/2304.06129
-2. Learning Concise and Descriptive Attributes (2023) - https://arxiv.org/pdf/2308.03685  
-3. Language in a Bottle (LaBo) (2023) - https://arxiv.org/pdf/2211.11158
+1. Label-free CBM 
+2. Learning Concise and Descriptive Attributes 
+3. Language in a Bottle (LaBo) 
 
 This script allows users to select which method to use for concept generation
 and applies the appropriate prompting, filtering, and optimization strategies.
@@ -27,10 +27,33 @@ import warnings
 warnings.filterwarnings("ignore")
 
 
+# ---------- Configurations ----------
+PROMPT_TEMPLATES = {
+    "label_free_cbm": {
+        "around": "List the things most commonly seen around a {class_name}:",
+        "important": "List the most important features for recognizing something as a {class_name}:",
+        "superclass": "Give superclasses for the word {class_name}:"
+    },
+    "labo": {
+        "main": "Describe what the {class_name} looks like:",
+        "appearance": "Describe the appearance of the {class_name}:",
+        "color": "Describe the color of the {class_name}:",
+        "pattern": "Describe the pattern of the {class_name}:",
+        "shape": "Describe the shape of the {class_name}:"
+    },
+    "LM4CV": {
+        "visual": "What are useful visual features to distinguish {class_name} in a photo?",
+        "attributes": "List visual attributes (color, texture, shape) that describe {class_name}:",
+        "functional": "List functional attributes (purpose, behavior, interaction) of {class_name}:",
+        "contextual": "List contextual attributes (location, time, association) related to {class_name}:"
+    }
+}
+
+
 @dataclass 
 class MethodConfig:
     """Configuration for different concept generation methods."""
-    method: str  # 'label_free_cbm', 'concise_descriptive', 'labo'
+    method: str  # 'label_free_cbm', 'LM4CV', 'labo'
     llama_endpoint: str = "http://localhost:11434/api/generate"
     model_name: str = "llama3"
     temperature: float = 0.7
@@ -61,6 +84,7 @@ class BaseMethod:
     def __init__(self, config: MethodConfig):
         self.config = config
         self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+        self.prompts = PROMPT_TEMPLATES[config.method]
         
     def query_llama(self, prompt: str) -> str:
         """Query local Llama instance."""
@@ -122,6 +146,22 @@ class BaseMethod:
         
         return concepts
 
+    def generate_all_concepts(self, class_names: List[str]) -> Dict[str, Dict[str, List[str]]]:
+        """Generate concepts using all prompts for the method."""
+        results = {}
+        for variant, template in self.prompts.items():
+            variant_concepts = {}
+            for cls in class_names:
+                prompt = template.format(class_name=cls)
+                if self.config.verbose:
+                    print(f"  Prompting for {cls} ({variant}): {prompt}")
+                
+                response = self.query_llama(prompt)
+                concepts = self.extract_concepts_from_response(response)
+                variant_concepts[cls] = concepts
+            results[variant] = variant_concepts
+        return results
+
 
 class LabelFreeCBM(BaseMethod):
     """
@@ -129,114 +169,41 @@ class LabelFreeCBM(BaseMethod):
     Paper: https://arxiv.org/pdf/2304.06129
     """
     
-    def generate_concepts(self, class_names: List[str]) -> Tuple[Dict[str, List[str]], Dict]:
+    def generate_concepts(self, class_names: List[str]) -> Tuple[Dict[str, Dict[str, List[str]]], Dict]:
         """Generate concepts using Label-free CBM method."""
         if self.config.verbose:
-            print("🚀 Using Label-free CBM method (ICLR 2023)")
+            print(" Using Label-free CBM method (ICLR 2023)")
         
-        all_concepts = {}
         generation_details = {
             'method': 'Label-free CBM',
-            'prompts_used': self._get_prompts(),
-            'classes_processed': []
+            'prompts_used': list(self.prompts.keys()),
+            'classes_processed': class_names
         }
         
-        # Step 1: Generate initial concept set
-        raw_concepts = []
-        for class_name in class_names:
-            class_concepts = []
-            class_info = {'class_name': class_name, 'raw_concepts': []}
-            
-            for prompt_template in self._get_prompts():
-                prompt = prompt_template.format(class_name=class_name)
-                if self.config.verbose:
-                    print(f"  Prompting for {class_name}: {prompt}")
-                
-                response = self.query_llama(prompt)
-                concepts = self.extract_concepts_from_response(response)
-                class_concepts.extend(concepts)
-                class_info['raw_concepts'].extend(concepts)
-            
-            all_concepts[class_name] = class_concepts
-            raw_concepts.extend(class_concepts)
-            generation_details['classes_processed'].append(class_info)
+        # Generate concepts for all prompt variants
+        raw_concepts = self.generate_all_concepts(class_names)
         
-        # Step 2: Apply Label-free CBM filtering to the overall pool
-        all_raw_concepts = []
-        for concepts_list in all_concepts.values():
-            all_raw_concepts.extend(concepts_list)
+        # Apply Label-free CBM filtering to each variant
+        filtered_concepts = {}
+        for variant, variant_concepts in raw_concepts.items():
+            filtered_variant = {}
+            for class_name, concepts in variant_concepts.items():
+                filtered_variant[class_name] = self._apply_label_free_filtering(
+                    concepts, class_names
+                )[:20]  # Limit to top 20 per class
+            filtered_concepts[variant] = filtered_variant
         
-        # Remove duplicates while preserving class association
-        unique_concepts = list(set(all_raw_concepts))
-        
-        if self.config.verbose:
-            print(f"  📊 Generated {len(all_raw_concepts)} raw concepts, {len(unique_concepts)} unique")
-        
-        # Step 3: Keep class-specific concepts (proper Label-free CBM approach)
-        final_concepts = {}
-        for class_name in class_names:
-            # Filter the class's original concepts using the same filtering steps
-            class_concepts = all_concepts[class_name]
-            
-            # Apply same filtering to class-specific concepts
-            # Step 1: Length filter
-            class_filtered = [c for c in class_concepts if len(c) <= self.config.length_threshold]
-            
-            # Step 2: Remove concepts too similar to class names
-            if class_filtered:
-                concept_embeddings = self.embedding_model.encode(class_filtered)
-                class_embeddings = self.embedding_model.encode(class_names)
-                similarities = cosine_similarity(concept_embeddings, class_embeddings)
-                max_similarities = np.max(similarities, axis=1)
-                
-                class_filtered = [c for i, c in enumerate(class_filtered) 
-                               if max_similarities[i] < self.config.class_similarity_threshold]
-            
-            # Step 3: Remove concepts too similar to each other within this class
-            if len(class_filtered) > 1:
-                concept_embeddings = self.embedding_model.encode(class_filtered)
-                similarities = cosine_similarity(concept_embeddings)
-                
-                to_remove = set()
-                for i in range(len(similarities)):
-                    for j in range(i + 1, len(similarities)):
-                        if similarities[i][j] > self.config.concept_similarity_threshold:
-                            to_remove.add(j)
-                
-                class_filtered = [c for i, c in enumerate(class_filtered) if i not in to_remove]
-            
-            # Keep only meaningful concepts (remove very generic ones)
-            class_filtered = [c for c in class_filtered 
-                            if len(c.split()) <= 6 and len(c.split()) >= 2]
-            
-            final_concepts[class_name] = class_filtered[:20]  # Limit to top 20 per class
-        
-        # Calculate total final concepts
-        total_final_concepts = sum(len(concepts) for concepts in final_concepts.values())
-        generation_details['final_concept_count'] = total_final_concepts
-        generation_details['concepts_per_class'] = {
-            class_name: len(concepts) for class_name, concepts in final_concepts.items()
-        }
-        
-        return final_concepts, generation_details
-    
-    def _get_prompts(self) -> List[str]:
-        """Get the three prompts from Label-free CBM paper."""
-        return [
-            "List the most important features for recognizing something as a {class_name}:",
-            "List the things most commonly seen around a {class_name}:",
-            "Give superclasses for the word {class_name}:"
-        ]
+        return filtered_concepts, generation_details
     
     def _apply_label_free_filtering(self, concepts: List[str], class_names: List[str]) -> List[str]:
         """Apply the 5-step filtering process from Label-free CBM."""
         if self.config.verbose:
-            print(f"  📝 Starting Label-free CBM filtering with {len(concepts)} concepts")
+            print(f"     Starting Label-free CBM filtering with {len(concepts)} concepts")
         
         # Step 1: Length filter (≤30 characters)
         concepts = [c for c in concepts if len(c) <= self.config.length_threshold]
         if self.config.verbose:
-            print(f"  ✂️  After length filter: {len(concepts)} concepts")
+            print(f"      After length filter: {len(concepts)} concepts")
         
         # Step 2: Remove concepts too similar to classes
         if concepts:
@@ -249,7 +216,7 @@ class LabelFreeCBM(BaseMethod):
                        if max_similarities[i] < self.config.class_similarity_threshold]
             
             if self.config.verbose:
-                print(f"  🎯 After class similarity filter: {len(concepts)} concepts")
+                print(f"     After class similarity filter: {len(concepts)} concepts")
         
         # Step 3: Remove concepts too similar to each other
         if len(concepts) > 1:
@@ -265,14 +232,14 @@ class LabelFreeCBM(BaseMethod):
             concepts = [c for i, c in enumerate(concepts) if i not in to_remove]
             
             if self.config.verbose:
-                print(f"  🔄 After concept similarity filter: {len(concepts)} concepts")
+                print(f"     After concept similarity filter: {len(concepts)} concepts")
         
         # Steps 4 & 5: Remove concepts not present in training data & can't project accurately
         # (Simplified - in full implementation would use CLIP scores and CLIP-Dissect)
         filtered_concepts = [c for c in concepts if len(c.split()) <= 5]  # Keep shorter concepts
         
         if self.config.verbose:
-            print(f"  ✅ Final concepts after all filtering: {len(filtered_concepts)} concepts")
+            print(f"     Final concepts after all filtering: {len(filtered_concepts)} concepts")
         
         return filtered_concepts
 
@@ -283,64 +250,43 @@ class ConciseDescriptiveMethod(BaseMethod):
     Paper: https://arxiv.org/pdf/2308.03685
     """
     
-    def generate_concepts(self, class_names: List[str]) -> Tuple[Dict[str, List[str]], Dict]:
+    def generate_concepts(self, class_names: List[str]) -> Tuple[Dict[str, Dict[str, List[str]]], Dict]:
         """Generate concepts using Concise & Descriptive method."""
         if self.config.verbose:
-            print("🚀 Using Concise & Descriptive Attributes method (2023)")
+            print(" Using Concise & Descriptive Attributes method (2023)")
         
         generation_details = {
             'method': 'Concise & Descriptive Attributes',
-            'prompts_used': self._get_prompts(),
+            'prompts_used': list(self.prompts.keys()),
             'target_concepts': self.config.target_concept_count,
-            'classes_processed': []
+            'classes_processed': class_names
         }
         
-        # Step 1: Generate large attribute pool
-        all_raw_concepts = []
-        class_concepts = {}
+        # Generate concepts for all prompt variants
+        raw_concepts = self.generate_all_concepts(class_names)
         
-        for class_name in class_names:
-            class_raw_concepts = []
-            class_info = {'class_name': class_name, 'raw_concepts': []}
+        # Apply task-guided attribute searching
+        filtered_concepts = {}
+        for variant, variant_concepts in raw_concepts.items():
+            # Collect all concepts from this variant
+            all_variant_concepts = []
+            for concepts in variant_concepts.values():
+                all_variant_concepts.extend(concepts)
             
-            # Use both instance and batch prompting
-            for prompt_template in self._get_prompts():
-                prompt = prompt_template.format(class_name=class_name)
-                if self.config.verbose:
-                    print(f"  Prompting for {class_name}: {prompt}")
-                
-                response = self.query_llama(prompt)
-                concepts = self.extract_concepts_from_response(response)
-                class_raw_concepts.extend(concepts)
-                class_info['raw_concepts'].extend(concepts)
+            # Apply task-guided selection
+            selected_concepts = self._task_guided_search(all_variant_concepts, class_names)
             
-            class_concepts[class_name] = class_raw_concepts
-            all_raw_concepts.extend(class_raw_concepts)
-            generation_details['classes_processed'].append(class_info)
+            # Distribute back to classes
+            filtered_variant = {}
+            concepts_per_class = max(1, len(selected_concepts) // len(class_names))
+            for i, class_name in enumerate(class_names):
+                start_idx = i * concepts_per_class
+                end_idx = min(start_idx + concepts_per_class, len(selected_concepts))
+                filtered_variant[class_name] = selected_concepts[start_idx:end_idx]
+            
+            filtered_concepts[variant] = filtered_variant
         
-        # Step 2: Apply task-guided attribute searching
-        selected_concepts = self._task_guided_search(all_raw_concepts, class_names)
-        
-        # Step 3: Distribute selected concepts
-        final_concepts = {}
-        concepts_per_class = max(1, len(selected_concepts) // len(class_names))
-        
-        for i, class_name in enumerate(class_names):
-            start_idx = i * concepts_per_class
-            end_idx = min(start_idx + concepts_per_class, len(selected_concepts))
-            final_concepts[class_name] = selected_concepts[start_idx:end_idx]
-        
-        generation_details['final_concept_count'] = len(selected_concepts)
-        return final_concepts, generation_details
-    
-    def _get_prompts(self) -> List[str]:
-        """Get prompts for Concise & Descriptive method."""
-        return [
-            "What are useful visual features to distinguish {class_name} in a photo?",
-            "List visual attributes (color, texture, shape) that describe {class_name}:",
-            "List functional attributes (purpose, behavior, interaction) of {class_name}:",
-            "List contextual attributes (location, time, association) related to {class_name}:"
-        ]
+        return filtered_concepts, generation_details
     
     def _task_guided_search(self, concepts: List[str], class_names: List[str]) -> List[str]:
         """
@@ -348,7 +294,7 @@ class ConciseDescriptiveMethod(BaseMethod):
         In full implementation, this would use learnable embeddings and Mahalanobis distance.
         """
         if self.config.verbose:
-            print(f"  🔍 Task-guided search from {len(concepts)} concepts")
+            print(f"     Task-guided search from {len(concepts)} concepts")
         
         # Remove duplicates
         unique_concepts = list(set(concepts))
@@ -392,7 +338,7 @@ class ConciseDescriptiveMethod(BaseMethod):
             selected_concepts = filtered_concepts
         
         if self.config.verbose:
-            print(f"  ✅ Selected {len(selected_concepts)} diverse concepts")
+            print(f"     Selected {len(selected_concepts)} diverse concepts")
         
         return selected_concepts
 
@@ -403,62 +349,43 @@ class LaBo(BaseMethod):
     Paper: https://arxiv.org/pdf/2211.11158
     """
     
-    def generate_concepts(self, class_names: List[str]) -> Tuple[Dict[str, List[str]], Dict]:
+    def generate_concepts(self, class_names: List[str]) -> Tuple[Dict[str, Dict[str, List[str]]], Dict]:
         """Generate concepts using LaBo method."""
         if self.config.verbose:
-            print("🚀 Using Language in a Bottle (LaBo) method (2023)")
+            print(" Using Language in a Bottle (LaBo) method (2023)")
         
         generation_details = {
             'method': 'Language in a Bottle (LaBo)',
-            'prompts_used': self._get_prompts(),
+            'prompts_used': list(self.prompts.keys()),
             'concepts_per_class': self.config.concepts_per_class,
-            'classes_processed': []
+            'classes_processed': class_names
         }
         
-        all_concepts = {}
+        # For LaBo, we primarily use the main prompt but generate multiple responses
+        filtered_concepts = {"main": {}}
         
-        # Step 1: Generate candidate concepts for each class
         for class_name in class_names:
-            class_info = {'class_name': class_name, 'raw_concepts': [], 'filtered_concepts': []}
-            
-            # Generate 500 sentences per class (as in paper)
+            # Generate candidate concepts for each class
             raw_concepts = []
-            for prompt_template in self._get_prompts():
-                for _ in range(100):  # Generate multiple responses per prompt
-                    prompt = prompt_template.format(class_name=class_name)
-                    response = self.query_llama(prompt)
-                    concepts = self.extract_concepts_from_response(response)
-                    raw_concepts.extend(concepts)
-                    
-                    if len(raw_concepts) >= 500:  # Limit as in paper
-                        break
+            main_prompt = self.prompts["main"].format(class_name=class_name)
+            
+            # Generate multiple responses per class (as in paper)
+            for _ in range(10):  # Generate 10 responses per class
+                response = self.query_llama(main_prompt)
+                concepts = self.extract_concepts_from_response(response)
+                raw_concepts.extend(concepts)
                 
-                if len(raw_concepts) >= 500:
+                if len(raw_concepts) >= 100:  # Limit to prevent too many concepts
                     break
             
-            class_info['raw_concepts'] = raw_concepts[:500]
-            
-            # Step 2: Apply submodular concept selection
+            # Apply submodular concept selection
             selected_concepts = self._submodular_selection(raw_concepts, class_name, class_names)
-            class_info['filtered_concepts'] = selected_concepts
-            
-            all_concepts[class_name] = selected_concepts
-            generation_details['classes_processed'].append(class_info)
+            filtered_concepts["main"][class_name] = selected_concepts
             
             if self.config.verbose:
-                print(f"  Generated {len(selected_concepts)} concepts for {class_name}")
+                print(f"    Generated {len(selected_concepts)} concepts for {class_name}")
         
-        return all_concepts, generation_details
-    
-    def _get_prompts(self) -> List[str]:
-        """Get the 5 prompts from LaBo paper."""
-        return [
-            "Describe what the {class_name} looks like:",
-            "Describe the appearance of the {class_name}:",
-            "Describe the color of the {class_name}:",
-            "Describe the pattern of the {class_name}:",
-            "Describe the shape of the {class_name}:"
-        ]
+        return filtered_concepts, generation_details
     
     def _submodular_selection(self, concepts: List[str], target_class: str, all_classes: List[str]) -> List[str]:
         """
@@ -503,6 +430,85 @@ class LaBo(BaseMethod):
         return [concept for concept, score in scored_concepts[:target_count]]
 
 
+# ---------- Output Writers ----------
+class UnifiedConceptWriter:
+    """Unified writer for all concept generation methods."""
+    
+    def __init__(self, config: MethodConfig):
+        self.config = config
+        os.makedirs(self.config.output_dir, exist_ok=True)
+
+    def save_label_free_outputs(self, concepts_dict: Dict[str, Dict[str, List[str]]], dataset_name: str):
+        """Save Label-free CBM outputs in the expected format."""
+        for variant, concepts in concepts_dict.items():
+            path = os.path.join(self.config.output_dir, f"gpt3_{dataset_name}_{variant}.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(concepts, f, indent=2, ensure_ascii=False)
+            print(f"✅ Saved: {path}")
+
+        # Save flat .txt from 'important' variant
+        important_concepts = concepts_dict.get("important", {})
+        txt_path = os.path.join(self.config.output_dir, f"{dataset_name}_filtered.txt")
+        with open(txt_path, "w", encoding="utf-8") as f:
+            for items in important_concepts.values():
+                for concept in items:
+                    f.write(concept.strip() + "\n")
+        print(f" Saved: {txt_path}")
+
+    def save_labo_outputs(self, concepts_dict: Dict[str, Dict[str, List[str]]], dataset_name: str):
+        """Save LaBo outputs in the expected format."""
+        output_dir = os.path.join(self.config.output_dir, "asso_opt", dataset_name)
+        os.makedirs(output_dir, exist_ok=True)
+        
+        json_path = os.path.join(output_dir, "selected_concepts.json")
+        log_path = os.path.join(output_dir, "log.txt")
+
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(concepts_dict["main"], f, indent=2, ensure_ascii=False)
+        
+        with open(log_path, "w", encoding="utf-8") as f:
+            for class_name, items in concepts_dict["main"].items():
+                f.write(f"[{class_name}]\n")
+                for item in items[:10]:  # Show top 10 in log
+                    f.write(f"  - {item}\n")
+                f.write("\n")
+        
+        print(f" LaBo output: {json_path}, {log_path}")
+
+    def save_lm4cv_outputs(self, concepts_dict: Dict[str, Dict[str, List[str]]], dataset_name: str):
+        """Save LM4CV outputs in the expected format."""
+        # Combine all variants into a single output for LM4CV
+        combined_concepts = {}
+        
+        # Get the first variant as the primary output, or combine all
+        first_variant = list(concepts_dict.values())[0]
+        for class_name in first_variant.keys():
+            class_concepts = []
+            for variant_concepts in concepts_dict.values():
+                class_concepts.extend(variant_concepts.get(class_name, []))
+            # Remove duplicates while preserving order
+            seen = set()
+            unique_concepts = []
+            for concept in class_concepts:
+                if concept not in seen:
+                    unique_concepts.append(concept)
+                    seen.add(concept)
+            combined_concepts[class_name] = unique_concepts
+        
+        json_path = os.path.join(self.config.output_dir, f"{dataset_name}_attributes.json")
+        txt_path = os.path.join(self.config.output_dir, f"{dataset_name}_attributes.txt")
+
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(combined_concepts, f, indent=2, ensure_ascii=False)
+        
+        with open(txt_path, "w", encoding="utf-8") as f:
+            for v in combined_concepts.values():
+                for c in v:
+                    f.write(c.strip() + "\n")
+        
+        print(f" LM4CV output: {json_path}, {txt_path}")
+
+
 class UnifiedConceptGenerator:
     """Main class that orchestrates different concept generation methods."""
     
@@ -512,14 +518,16 @@ class UnifiedConceptGenerator:
         # Initialize the appropriate method
         if config.method == 'label_free_cbm':
             self.method = LabelFreeCBM(config)
-        elif config.method == 'concise_descriptive':
+        elif config.method == 'LM4CV':
             self.method = ConciseDescriptiveMethod(config)
         elif config.method == 'labo':
             self.method = LaBo(config)
         else:
             raise ValueError(f"Unknown method: {config.method}")
+        
+        self.writer = UnifiedConceptWriter(config)
     
-    def generate_concepts(self, class_names: List[str]) -> Tuple[Dict[str, List[str]], Dict]:
+    def generate_concepts(self, class_names: List[str]) -> Tuple[Dict[str, Dict[str, List[str]]], Dict]:
         """Generate concepts using the selected method."""
         if self.config.verbose:
             print(f"\n{'='*60}")
@@ -541,7 +549,7 @@ class UnifiedConceptGenerator:
         
         return concepts, details
     
-    def _print_summary(self, concepts: Dict[str, List[str]], details: Dict):
+    def _print_summary(self, concepts: Dict[str, Dict[str, List[str]]], details: Dict):
         """Print generation summary."""
         print(f"\n{'='*60}")
         print(f"GENERATION SUMMARY")
@@ -550,110 +558,29 @@ class UnifiedConceptGenerator:
         print(f"Total classes: {details['total_classes']}")
         print(f"Generation time: {details['generation_time']}")
         
-        total_concepts = sum(len(class_concepts) for class_concepts in concepts.values())
-        print(f"Total concepts generated: {total_concepts}")
-        
-        print(f"\nPer-class breakdown:")
-        for class_name, class_concepts in concepts.items():
-            print(f"  {class_name}: {len(class_concepts)} concepts")
-            if self.config.verbose and class_concepts:
-                print(f"    Examples: {', '.join(class_concepts[:3])}")
+        for variant_name, variant_concepts in concepts.items():
+            total_concepts = sum(len(class_concepts) for class_concepts in variant_concepts.values())
+            print(f"Total concepts in {variant_name}: {total_concepts}")
+            
+            if self.config.verbose:
+                print(f"\nPer-class breakdown for {variant_name}:")
+                for class_name, class_concepts in variant_concepts.items():
+                    print(f"  {class_name}: {len(class_concepts)} concepts")
+                    if class_concepts:
+                        print(f"    Examples: {', '.join(class_concepts[:3])}")
     
-    def save_results(self, concepts: Dict[str, List[str]], details: Dict, 
-                    class_names: List[str], output_file: Optional[str] = None):
-        """Save generated concepts in Label-free CBM repository format."""
-        # Ensure output directory exists
-        os.makedirs(self.config.output_dir, exist_ok=True)
+    def save_results(self, concepts: Dict[str, Dict[str, List[str]]], details: Dict, 
+                    class_names: List[str], dataset_name: str = "cifar10"):
+        """Save generated concepts in the appropriate format for each method."""
+        if self.config.method == "label_free_cbm":
+            self.writer.save_label_free_outputs(concepts, dataset_name)
+        elif self.config.method == "labo":
+            self.writer.save_labo_outputs(concepts, dataset_name)
+        elif self.config.method == "LM4CV":
+            self.writer.save_lm4cv_outputs(concepts, dataset_name)
         
-        # Create dataset name from class names (e.g., cifar10, cifar100)
-        if len(class_names) == 10:
-            dataset_name = "cifar10"
-        elif len(class_names) == 100:
-            dataset_name = "cifar100"  
-        else:
-            dataset_name = f"dataset_{len(class_names)}classes"
-        
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        
-        # 1. Create filtered.txt file (like cifar10_filtered.txt)
-        txt_filename = f"{dataset_name}_filtered_{timestamp}.txt"
-        txt_path = os.path.join(self.config.output_dir, txt_filename)
-        
-        # Collect all unique concepts across all classes
-        all_concepts = []
-        for class_concepts in concepts.values():
-            all_concepts.extend(class_concepts)
-        
-        # Remove duplicates while preserving order
-        unique_concepts = []
-        seen = set()
-        for concept in all_concepts:
-            if concept not in seen:
-                unique_concepts.append(concept)
-                seen.add(concept)
-        
-        # Write to txt file (one concept per line)
-        with open(txt_path, 'w', encoding='utf-8') as f:
-            for concept in unique_concepts:
-                f.write(f"{concept}\n")
-        
-        print(f"💾 Filtered concepts saved to: {txt_path}")
-        print(f"   Total unique concepts: {len(unique_concepts)}")
-        
-        # 2. Create three separate JSON files for each prompt type
-        prompt_types = ['prompt1', 'prompt2', 'prompt3']
-        prompt_names = {
-            'prompt1': 'most_important_features',
-            'prompt2': 'commonly_seen_around', 
-            'prompt3': 'superclasses'
-        }
-        
-        # Split concepts roughly equally among the three prompt types
-        concepts_per_prompt = len(unique_concepts) // 3
-        
-        for i, (prompt_key, prompt_name) in enumerate(prompt_names.items()):
-            json_filename = f"{dataset_name}_{prompt_name}_{timestamp}.json"
-            json_path = os.path.join(self.config.output_dir, json_filename)
-            
-            # Assign concepts to this prompt type
-            start_idx = i * concepts_per_prompt
-            if i == 2:  # Last prompt gets remaining concepts
-                end_idx = len(unique_concepts)
-            else:
-                end_idx = (i + 1) * concepts_per_prompt
-            
-            prompt_concepts = unique_concepts[start_idx:end_idx]
-            
-            # Create class-concept mapping for this prompt
-            prompt_data = {}
-            concepts_per_class = max(1, len(prompt_concepts) // len(class_names))
-            
-            for j, class_name in enumerate(class_names):
-                class_start = j * concepts_per_class
-                class_end = min(class_start + concepts_per_class, len(prompt_concepts))
-                
-                # If this class would get no concepts, give it some from the pool
-                if class_start >= len(prompt_concepts):
-                    class_concepts = prompt_concepts[:min(5, len(prompt_concepts))]
-                else:
-                    class_concepts = prompt_concepts[class_start:class_end]
-                    # Ensure each class gets at least a few concepts
-                    if len(class_concepts) < 3 and len(prompt_concepts) >= 3:
-                        class_concepts = prompt_concepts[:3]
-                
-                prompt_data[class_name] = class_concepts
-            
-            # Save JSON file
-            with open(json_path, 'w', encoding='utf-8') as f:
-                json.dump(prompt_data, f, indent=2, ensure_ascii=False)
-            
-            print(f"💾 {prompt_name} concepts saved to: {json_path}")
-            print(f"   Concepts in this prompt: {len(prompt_concepts)}")
-        
-        # 3. Create comprehensive metadata file
-        metadata_filename = f"{dataset_name}_metadata_{timestamp}.json"
-        metadata_path = os.path.join(self.config.output_dir, metadata_filename)
-        
+        # Save metadata
+        metadata_path = os.path.join(self.config.output_dir, f"{dataset_name}_{self.config.method}_metadata.json")
         metadata = {
             'dataset_info': {
                 'dataset_name': dataset_name,
@@ -663,8 +590,6 @@ class UnifiedConceptGenerator:
             'generation_info': {
                 'method': self.config.method,
                 'generation_timestamp': datetime.now().isoformat(),
-                'total_unique_concepts': len(unique_concepts),
-                'concepts_per_class_avg': len(unique_concepts) // len(class_names)
             },
             'config': {
                 'model_name': self.config.model_name,
@@ -674,63 +599,12 @@ class UnifiedConceptGenerator:
                 'class_similarity_threshold': self.config.class_similarity_threshold,
                 'concept_similarity_threshold': self.config.concept_similarity_threshold
             },
-            'files_generated': {
-                'filtered_concepts': txt_filename,
-                'most_important_features': f"{dataset_name}_most_important_features_{timestamp}.json",
-                'commonly_seen_around': f"{dataset_name}_commonly_seen_around_{timestamp}.json",
-                'superclasses': f"{dataset_name}_superclasses_{timestamp}.json"
-            },
             'generation_details': details
         }
         
         with open(metadata_path, 'w', encoding='utf-8') as f:
             json.dump(metadata, f, indent=2, ensure_ascii=False)
-        
-        print(f"💾 Metadata saved to: {metadata_path}")
-        
-        # 4. Create summary report
-        summary_filename = f"{dataset_name}_summary_{timestamp}.txt"
-        summary_path = os.path.join(self.config.output_dir, summary_filename)
-        
-        with open(summary_path, 'w', encoding='utf-8') as f:
-            f.write(f"Label-free CBM Concept Generation Summary\n")
-            f.write(f"{'='*50}\n")
-            f.write(f"Dataset: {dataset_name}\n")
-            f.write(f"Method: {self.config.method}\n") 
-            f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-            f.write(f"Total Classes: {len(class_names)}\n")
-            f.write(f"Total Unique Concepts: {len(unique_concepts)}\n")
-            f.write(f"Average Concepts per Class: {len(unique_concepts) // len(class_names)}\n")
-            f.write(f"\nFiles Generated:\n")
-            f.write(f"- Filtered concepts: {txt_filename}\n")
-            f.write(f"- Most important features: {dataset_name}_most_important_features_{timestamp}.json\n")
-            f.write(f"- Commonly seen around: {dataset_name}_commonly_seen_around_{timestamp}.json\n")
-            f.write(f"- Superclasses: {dataset_name}_superclasses_{timestamp}.json\n")
-            f.write(f"- Metadata: {metadata_filename}\n")
-            f.write(f"\nClass Names:\n")
-            for i, class_name in enumerate(class_names, 1):
-                f.write(f"{i:2d}. {class_name}\n")
-            
-            f.write(f"\nSample Concepts:\n")
-            for i, concept in enumerate(unique_concepts[:20], 1):
-                f.write(f"{i:2d}. {concept}\n")
-            if len(unique_concepts) > 20:
-                f.write(f"... and {len(unique_concepts) - 20} more concepts\n")
-        
-        print(f"💾 Summary report saved to: {summary_path}")
-        print(f"\n🎉 Generated {len(unique_concepts)} concepts in Label-free CBM format!")
-        print(f"📁 All files saved to: {self.config.output_dir}")
-        
-        return {
-            'txt_file': txt_path,
-            'json_files': [
-                os.path.join(self.config.output_dir, f"{dataset_name}_most_important_features_{timestamp}.json"),
-                os.path.join(self.config.output_dir, f"{dataset_name}_commonly_seen_around_{timestamp}.json"), 
-                os.path.join(self.config.output_dir, f"{dataset_name}_superclasses_{timestamp}.json")
-            ],
-            'metadata_file': metadata_path,
-            'summary_file': summary_path
-        }
+        print(f" Metadata saved to: {metadata_path}")
 
     @staticmethod
     def load_class_names(file_path: str) -> List[str]:
@@ -738,14 +612,8 @@ class UnifiedConceptGenerator:
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"Class names file not found: {file_path}")
         
-        class_names = []
         with open(file_path, 'r', encoding='utf-8') as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith('#'):
-                    class_names.append(line)
-        
-        return class_names
+            return [line.strip() for line in f if line.strip() and not line.startswith('#')]
 
 
 def main():
@@ -756,15 +624,15 @@ def main():
         epilog="""
 Available Methods:
   label_free_cbm    - Label-free CBM (ICLR 2023) - Automated CBM without manual concepts
-  concise_descriptive - Concise & Descriptive Attributes (2023) - Learning compact attribute sets  
-  labo             - Language in a Bottle (2023) - LLM-guided concept bottlenecks
+  LM4CV             - Concise & Descriptive Attributes (2023) - Learning compact attribute sets  
+  labo              - Language in a Bottle (2023) - LLM-guided concept bottlenecks
 
 Examples:
   # Use Label-free CBM method
   python script.py --classes classes.txt --method label_free_cbm --verbose
   
   # Use Concise & Descriptive method with 16 target concepts
-  python script.py --classes classes.txt --method concise_descriptive --target-concepts 16
+  python script.py --classes classes.txt --method LM4CV --target-concepts 16
   
   # Use LaBo method with 30 concepts per class
   python script.py --classes classes.txt --method labo --concepts-per-class 30
@@ -775,14 +643,14 @@ Examples:
     parser.add_argument("--classes", "-c", required=True,
                        help="Path to file containing class names (one per line)")
     parser.add_argument("--method", "-m", required=True,
-                       choices=['label_free_cbm', 'concise_descriptive', 'labo'],
+                       choices=['label_free_cbm', 'LM4CV', 'labo'],
                        help="Concept generation method to use")
     
     # Optional arguments
-    parser.add_argument("--output", "-o", 
-                       help="Output file name (default: auto-generated)")
-    parser.add_argument("--output-dir", default="/DiskHDD/s112504502/local-llm/output_files/unify_concept_output",
-                       help="Output directory (default: /DiskHDD/s112504502/local-llm/output_files/unify_concept_output)")
+    parser.add_argument("--output-dir", required=True,
+                       help="Output directory for generated concepts")
+    parser.add_argument("--dataset", default="cifar10",
+                       help="Dataset name for output files")
     parser.add_argument("--llama-endpoint", default="http://localhost:11434/api/generate",
                        help="Llama API endpoint")
     parser.add_argument("--model-name", default="llama3",
@@ -813,70 +681,8 @@ Examples:
     # Load class names
     try:
         class_names = UnifiedConceptGenerator.load_class_names(args.classes)
-        print(f"✅ Loaded {len(class_names)} class names from {args.classes}")
+        print(f" Loaded {len(class_names)} class names from {args.classes}")
         if args.verbose:
             print(f"Classes: {', '.join(class_names)}")
     except FileNotFoundError as e:
-        print(f"❌ Error: {e}")
-        return 1
-    
-    # Create configuration
-    config = MethodConfig(
-        method=args.method,
-        llama_endpoint=args.llama_endpoint,
-        model_name=args.model_name,
-        temperature=args.temperature,
-        max_tokens=args.max_tokens,
-        length_threshold=args.length_threshold,
-        class_similarity_threshold=args.class_similarity_threshold,
-        concept_similarity_threshold=args.concept_similarity_threshold,
-        target_concept_count=args.target_concepts,
-        concepts_per_class=args.concepts_per_class,
-        verbose=args.verbose,
-        output_dir=args.output_dir
-    )
-    
-    # Initialize generator
-    try:
-        generator = UnifiedConceptGenerator(config)
-    except ValueError as e:
-        print(f"❌ Error: {e}")
-        return 1
-    
-    # Generate concepts
-    try:
-        concepts, details = generator.generate_concepts(class_names)
-        
-        # 🔽 Write entire flattened concept list
-        flat_concepts = set()
-        for concept_list in concepts.values():
-            flat_concepts.update(concept_list)
-
-        flat_output_path = os.path.join(config.output_dir, "flattened_concepts.txt")
-        with open(flat_output_path, "w", encoding="utf-8") as f:
-            for concept in sorted(flat_concepts):
-                f.write(concept + "\n")
-
-        print(f"\n📝 Flattened concept list saved to: {flat_output_path}")
-        print(f"   Total unique concepts: {len(flat_concepts)}")
-
-
-        # Save results
-        output_path = generator.save_results(concepts, details, class_names, args.output)
-        
-        print(f"\n🎉 Concept generation completed successfully!")
-        print(f"📊 Generated concepts for {len(class_names)} classes using {args.method}")
-        print(f"📁 Results saved to: {output_path}")
-        
-        return 0
-        
-    except Exception as e:
-        print(f"❌ Error during concept generation: {e}")
-        if args.verbose:
-            import traceback
-            traceback.print_exc()
-        return 1
-
-
-if __name__ == "__main__":
-    exit(main())
+        print(f" Error: {e}")
