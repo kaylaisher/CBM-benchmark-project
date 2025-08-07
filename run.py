@@ -18,7 +18,7 @@ sys.path.insert(0, str(ROOT_DIR / 'src'))
 os.chdir(ROOT_DIR)
 
 # Now import and run
-from async_main_interface_test import main
+from async_main_interface import main
 
 if __name__ == "__main__":
     print(f"🚀 Async LLM Query Module")
