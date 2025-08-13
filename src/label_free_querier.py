@@ -16,7 +16,6 @@ class LabelFreeQuerier:
         self.enable_detailed_logging = enable_detailed_logging
         self.logger = DetailedLogger() if enable_detailed_logging else None
 
-        # Improved prompts that encourage concise, word-based responses
         self.prompts = {
             "important": """List the most important visual features for recognizing a {class_name}. 
 Provide only SHORT PHRASES or SINGLE WORDS (1-3 words each), one per line:
@@ -37,7 +36,6 @@ Provide only SHORT PHRASES or SINGLE WORDS (1-3 words each), one per line:
 - Avoid full sentences"""
         }
         
-        # Concept limits per prompt type
         self.concept_limits = {
             "important": 10,  # Limit important features to 10
             "around": 10,     # Limit contextual concepts to 10
@@ -62,7 +60,7 @@ Provide only SHORT PHRASES or SINGLE WORDS (1-3 words each), one per line:
         results = {}
 
         for prompt_type, prompt_template in self.prompts.items():
-            header = f"\n🔍 Generating {prompt_type} concepts..."
+            header = f"\n Generating {prompt_type} concepts..."
             if self.logger:
                 self.logger.log_and_print(header)
             else:
@@ -73,8 +71,8 @@ Provide only SHORT PHRASES or SINGLE WORDS (1-3 words each), one per line:
                 prompt = prompt_template.format(class_name=class_name)
 
                 if self.logger:
-                    self.logger.log(f"🧠 Prompt for '{class_name}' [{prompt_type}]: {prompt}")
-                print(f"🧠 Processing '{class_name}' [{prompt_type}]...")
+                    self.logger.log(f" Prompt for '{class_name}' [{prompt_type}]: {prompt}")
+                print(f" Processing '{class_name}' [{prompt_type}]...")
 
                 try:
                     response = await self.llm_client.query(prompt)
@@ -91,21 +89,19 @@ Provide only SHORT PHRASES or SINGLE WORDS (1-3 words each), one per line:
 
                     print(f"  {class_name}: {len(concepts)} concepts extracted")
                     if self.logger:
-                        self.logger.log(f"✅ Extracted concepts for '{class_name}': {concepts}")
+                        self.logger.log(f" Extracted concepts for '{class_name}': {concepts}")
 
                 except Exception as e:
-                    err_msg = f"❌ Error querying class '{class_name}' [{prompt_type}]: {e}"
+                    err_msg = f" Error querying class '{class_name}' [{prompt_type}]: {e}"
                     print(err_msg)
                     if self.logger: 
                         self.logger.log(err_msg)
                     concepts_dict[class_name] = []
 
-                # ✅ FIXED: Use asyncio.sleep for async context
                 await asyncio.sleep(1.5)
 
             results[prompt_type] = concepts_dict
             
-            # Save to appropriate directory structure
             output_dir = "outputs/label_free/gpt3_init"
             os.makedirs(output_dir, exist_ok=True)
             json_path = os.path.join(output_dir, f"gpt3_{dataset_name}_{prompt_type}.json")
@@ -113,7 +109,7 @@ Provide only SHORT PHRASES or SINGLE WORDS (1-3 words each), one per line:
             with open(json_path, 'w') as f:
                 json.dump(concepts_dict, f, indent=2)
 
-            msg = f"💾 Saved {prompt_type} concepts to {json_path}"
+            msg = f" Saved {prompt_type} concepts to {json_path}"
             print(msg)
             if self.logger: 
                 self.logger.log(msg)
@@ -124,7 +120,6 @@ Provide only SHORT PHRASES or SINGLE WORDS (1-3 words each), one per line:
         """Enhanced parsing to extract clean concept words/phrases"""
         concepts = []
         
-        # Split by lines and process each
         lines = response.split('\n')
         
         for line in lines:
@@ -132,9 +127,8 @@ Provide only SHORT PHRASES or SINGLE WORDS (1-3 words each), one per line:
             if not line:
                 continue
                 
-            # Remove common prefixes and formatting
-            line = re.sub(r'^[-•*]\s*', '', line)  # Remove bullet points
-            line = re.sub(r'^\d+[\.\)]\s*', '', line)  # Remove numbering
+            line = re.sub(r'^[-•*]\s*', '', line) 
+            line = re.sub(r'^\d+[\.\)]\s*', '', line)  
             line = line.strip()
             
             if not line:
@@ -238,7 +232,6 @@ Provide only SHORT PHRASES or SINGLE WORDS (1-3 words each), one per line:
         if not concepts:
             return []
         
-        # Remove duplicates while preserving order
         seen = set()
         filtered = []
         
@@ -253,9 +246,8 @@ Provide only SHORT PHRASES or SINGLE WORDS (1-3 words each), one per line:
     async def apply_filtering(self, all_concepts: Dict, dataset_name: str) -> List[str]:
         """Apply comprehensive filtering to all concepts"""
         if self.logger:
-            self.logger.log("🔍 Starting concept filtering process...")
+            self.logger.log(" Starting concept filtering process...")
         
-        # Combine all concepts with frequency tracking
         concept_counter = Counter()
         
         for prompt_type in all_concepts:
@@ -263,11 +255,9 @@ Provide only SHORT PHRASES or SINGLE WORDS (1-3 words each), one per line:
                 for concept in concepts:
                     concept_counter[concept.lower()] += 1
         
-        # Filter based on frequency and quality
         filtered_concepts = []
         
         for concept, count in concept_counter.items():
-            # Find original case version
             original_concept = None
             for prompt_type in all_concepts:
                 for class_name, concepts in all_concepts[prompt_type].items():
@@ -283,10 +273,8 @@ Provide only SHORT PHRASES or SINGLE WORDS (1-3 words each), one per line:
             if original_concept and self._is_valid_concept(original_concept):
                 filtered_concepts.append(original_concept)
         
-        # Sort by length (shorter concepts first, they're usually better)
         filtered_concepts.sort(key=len)
         
-        # Save filtered concepts
         output_path = f"outputs/label_free/{dataset_name}_filtered.txt"
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         
@@ -294,8 +282,8 @@ Provide only SHORT PHRASES or SINGLE WORDS (1-3 words each), one per line:
             for concept in filtered_concepts:
                 f.write(f"{concept}\n")
         
-        print(f"✅ Saved {len(filtered_concepts)} filtered concepts to {output_path}")
+        print(f" Saved {len(filtered_concepts)} filtered concepts to {output_path}")
         if self.logger:
-            self.logger.log(f"✅ Filtering complete: {len(filtered_concepts)} concepts saved")
+            self.logger.log(f" Filtering complete: {len(filtered_concepts)} concepts saved")
         
         return filtered_concepts
