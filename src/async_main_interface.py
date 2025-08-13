@@ -79,7 +79,7 @@ class AsyncLLMQueryInterface:
                     
                     try:
                         class_names = self._load_classes_from_config(dataset_name)
-                        print(f"✅ Loaded {len(class_names)} classes for {dataset_name}")
+                        print(f" Loaded {len(class_names)} classes for {dataset_name}")
                         return dataset_name, class_names
                         
                     except (FileNotFoundError, ValueError) as e:
@@ -145,7 +145,7 @@ class AsyncLLMQueryInterface:
         for dataset, config in self.config['datasets'].items():
             classes_file = config.get('classes_file', 'Not specified')
             description = config.get('description', 'No description')
-            file_exists = "✅" if Path(classes_file).exists() else "❌"
+            file_exists = "v" if Path(classes_file).exists() else "x"
             print(f"  {file_exists} {dataset}: {classes_file}")
             print(f"     {description}")
         
@@ -187,7 +187,7 @@ class AsyncLLMQueryInterface:
         
         try:
             if dataset_name == "all":
-                print("📋 Generating concepts for all CB-LLM datasets...")
+                print(" Generating concepts for all CB-LLM datasets...")
                 all_results = await querier.generate_all_datasets()
                 
                 export_path = "outputs/cb_llm_concepts/concepts.py"
