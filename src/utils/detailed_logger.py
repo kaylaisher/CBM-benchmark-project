@@ -10,10 +10,8 @@ class DetailedLogger:
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(exist_ok=True)
         
-        # Create timestamp for this session
         self.timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         
-        # Initialize log structure
         self.session_log = {
             "session_info": {
                 "timestamp": self.timestamp,
@@ -41,7 +39,6 @@ class DetailedLogger:
         
         self.session_log["session_info"]["methods_run"].append(method_info)
         
-        # Create method-specific log file
         log_file = self.output_dir / f"{method_name}_{dataset_name}_{self.timestamp}.md"
         with open(log_file, 'w') as f:
             f.write(f"# {method_name.upper()} Detailed Execution Log\n\n")
