@@ -8,7 +8,7 @@
  - ready-to-used concepts to train VLG-CBM, LF-CBM, LaBo, LM4CV, and CB-LLM
  - interactive user entrance to choose models and datasets
 
-#installation
+# installation
 
 ```bash
 # Clone the repo
@@ -16,7 +16,7 @@ git clone https://github.com/kaylaisher/CBM-benchmark-project-concept-generation
 cd CBM-benchmark-project-concept-generation-module
 ```
 
-#run the code
+# run the code
 
 ```bash
 python run.py
